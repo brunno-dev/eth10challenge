@@ -1,0 +1,23 @@
+{
+  "name": "eth-search-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "config": "node config.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@noble/hashes": "2.4.0",
+    "@scure/bip32": "2.4.0",
+    "@scure/bip39": "2.4.0"
+  }
+}

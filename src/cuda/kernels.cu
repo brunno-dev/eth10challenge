@@ -4,8 +4,8 @@
 // (see src/gpu.rs): SHA-256, SHA-512, Keccak-256, HMAC-SHA512, PBKDF2, secp256k1
 // (priv->pubkey, compressed and uncompressed, and scalar add mod n), and BIP32
 // m/44'/60'/0'/0/0 seed->Ethereum address. The full search is split into
-// k_filter (cheap BIP-39 checksum, compacting survivors) and k_pipeline (heavy
-// derivation), so the heavy pass has no warp divergence.
+// k_filter (checksum), k_candidate_seeds (PBKDF2) and k_seed_addresses (BIP32).
+// The heavy passes process compacted survivors only.
 //
 // All multi-byte values follow the relevant standard's byte order (big-endian
 // for SHA, little-endian for Keccak lanes), independent of GPU endianness, so
@@ -163,7 +163,7 @@ __device__ void sha512_init(sha512_ctx* c) {
 // hot PBKDF2 loop entirely in registers: no local-memory block to memcpy into,
 // and no byte-at-a-time reassembly of the schedule. `w` is clobbered.
 //
-// Callers that pass compile-time-constant padding words (see pbkdf2_bip39_seed,
+// Callers that pass compile-time-constant padding words (pbkdf2_hmac_sha512_64,
 // where w[8..15] are fixed) get the first schedule rounds constant-folded for
 // free, because the full unroll makes every w index a constant.
 __device__ __forceinline__ void sha512_block(u64 h[8], u64 w[16]) {
@@ -409,7 +409,7 @@ __device__ void hmac_sha512(const u8* key, u32 keylen, const u8* msg, u32 msglen
 // ===========================================================================
 
 // IMPORTANT: __noinline__ is required (here and on seed_to_eth_address). When both
-// are inlined into the single huge k_pipeline frame, nvcc -O miscompiles and
+// were inlined into the old combined pipeline frame, nvcc -O miscompiled and
 // pbkdf2 produces a wrong seed (verified: the standalone kernels are correct, but
 // the inlined combination corrupts the result). Keeping each as its own frame
 // matches the individually-verified kernels bit-for-bit. Do not remove.
@@ -595,89 +595,81 @@ __device__ int ge256(const u64 a[4], const u64 b[4]) {
     return 1; // equal
 }
 
-// r = a - m (assumes a >= m), 256-bit
-__device__ void sub256(u64 r[4], const u64 a[4], const u64 m[4]) {
-    unsigned __int128 borrow = 0;
-    for (int i = 0; i < 4; i++) {
-        unsigned __int128 cur = (unsigned __int128)a[i] - m[i] - borrow;
-        r[i] = (u64)cur;
-        borrow = (cur >> 64) & 1; // 1 if underflow
-    }
+// Portable 64-bit limbs. These compile on Windows as well as Linux; no
+// host-compiler __int128 extension is needed. mul_acc's maximum is 2^128-1.
+__device__ __forceinline__ u64 add_carry(u64 a, u64 b, u64& carry) {
+    u64 t = a + b;
+    u64 r = t + carry;
+    carry = (t < a) | (r < t);
+    return r;
+}
+__device__ __forceinline__ u64 sub_borrow(u64 a, u64 b, u64& borrow) {
+    u64 t = a - b;
+    u64 r = t - borrow;
+    borrow = (a < b) | (t < borrow);
+    return r;
+}
+__device__ __forceinline__ u64 mul_acc(u64 a, u64 b, u64 x, u64& carry) {
+    u64 lo = a * b, hi = __umul64hi(a, b);
+    u64 t = lo + x; hi += (t < lo);
+    lo = t + carry; hi += (lo < t);
+    carry = hi;
+    return lo;
 }
 
+// r = a - m modulo 2^256; supports aliasing.
+__device__ void sub256(u64 r[4], const u64 a[4], const u64 m[4]) {
+    u64 borrow = 0;
+    for (int i = 0; i < 4; i++) r[i] = sub_borrow(a[i], m[i], borrow);
+}
 __device__ __forceinline__ void fe_reduce_p(fe* r) {
     if (ge256(r->n, P)) sub256(r->n, r->n, P);
 }
-
-__device__ void fe_add(fe* r, const fe* a, const fe* b) {
-    unsigned __int128 carry = 0;
-    for (int i = 0; i < 4; i++) {
-        unsigned __int128 cur = (unsigned __int128)a->n[i] + b->n[i] + carry;
-        r->n[i] = (u64)cur; carry = cur >> 64;
-    }
-    // value = r + carry*2^256 ≡ r + carry*FE_C (mod p)
+// Fold a carry above bit 255 using 2^256 == FE_C (mod p).
+__device__ __forceinline__ void fe_fold_carry(fe* r, u64 carry) {
     if (carry) {
-        unsigned __int128 c2 = 0;
-        unsigned __int128 cur = (unsigned __int128)r->n[0] + (unsigned __int128)carry*FE_C;
-        r->n[0]=(u64)cur; c2=cur>>64;
-        for (int i = 1; i < 4; i++) { cur=(unsigned __int128)r->n[i]+c2; r->n[i]=(u64)cur; c2=cur>>64; }
-        if (c2) { // extremely rare second wrap
-            cur=(unsigned __int128)r->n[0]+(unsigned __int128)c2*FE_C; r->n[0]=(u64)cur; c2=cur>>64;
-            for (int i=1;i<4;i++){cur=(unsigned __int128)r->n[i]+c2;r->n[i]=(u64)cur;c2=cur>>64;}
+        u64 c = 0;
+        r->n[0] = add_carry(r->n[0], FE_C, c);
+        for (int i = 1; i < 4; i++) r->n[i] = add_carry(r->n[i], 0, c);
+        if (c) {
+            c = 0;
+            r->n[0] = add_carry(r->n[0], FE_C, c);
+            for (int i = 1; i < 4; i++) r->n[i] = add_carry(r->n[i], 0, c);
         }
     }
+}
+__device__ void fe_add(fe* r, const fe* a, const fe* b) {
+    u64 carry = 0;
+    for (int i = 0; i < 4; i++) r->n[i] = add_carry(a->n[i], b->n[i], carry);
+    fe_fold_carry(r, carry);
     fe_reduce_p(r);
 }
-
 __device__ void fe_sub(fe* r, const fe* a, const fe* b) {
-    // r = a - b mod p; if underflow add p
-    unsigned __int128 borrow = 0;
-    u64 t[4];
-    for (int i = 0; i < 4; i++) {
-        unsigned __int128 cur = (unsigned __int128)a->n[i] - b->n[i] - borrow;
-        t[i] = (u64)cur; borrow = (cur >> 64) & 1;
-    }
+    u64 borrow = 0, t[4];
+    for (int i = 0; i < 4; i++) t[i] = sub_borrow(a->n[i], b->n[i], borrow);
     if (borrow) {
-        unsigned __int128 carry = 0;
-        for (int i = 0; i < 4; i++) {
-            unsigned __int128 cur = (unsigned __int128)t[i] + P[i] + carry;
-            t[i] = (u64)cur; carry = cur >> 64;
-        }
+        u64 carry = 0;
+        for (int i = 0; i < 4; i++) t[i] = add_carry(t[i], P[i], carry);
     }
-    r->n[0]=t[0]; r->n[1]=t[1]; r->n[2]=t[2]; r->n[3]=t[3];
+    for (int i = 0; i < 4; i++) r->n[i] = t[i];
 }
-
-// reduce a 512-bit product (8 little-endian limbs) mod p into r
 __device__ void fe_reduce512(fe* r, const u64 t[8]) {
-    // m[0..3] = t_lo + t_hi*FE_C, m[4] = carry
-    u64 m[5];
-    unsigned __int128 carry = 0;
-    for (int i = 0; i < 4; i++) {
-        unsigned __int128 cur = (unsigned __int128)t[4+i]*FE_C + t[i] + carry;
-        m[i] = (u64)cur; carry = cur >> 64;
-    }
-    m[4] = (u64)carry;
-    // fold m[4]*FE_C back in
-    unsigned __int128 cur = (unsigned __int128)m[4]*FE_C + m[0];
-    r->n[0] = (u64)cur; carry = cur >> 64;
-    for (int i = 1; i < 4; i++) { cur = (unsigned __int128)m[i] + carry; r->n[i] = (u64)cur; carry = cur >> 64; }
-    u64 extra = (u64)carry; // 0 or 1
-    if (extra) {
-        cur = (unsigned __int128)r->n[0] + (unsigned __int128)extra*FE_C; r->n[0]=(u64)cur; carry=cur>>64;
-        for (int i = 1; i < 4; i++) { cur=(unsigned __int128)r->n[i]+carry; r->n[i]=(u64)cur; carry=cur>>64; }
-    }
+    u64 m[5], carry = 0;
+    for (int i = 0; i < 4; i++) m[i] = mul_acc(t[4+i], FE_C, t[i], carry);
+    m[4] = carry;
+    carry = 0;
+    r->n[0] = mul_acc(m[4], FE_C, m[0], carry);
+    // The first carry can be 2; b=0 makes add_carry valid for this step too.
+    for (int i = 1; i < 4; i++) r->n[i] = add_carry(m[i], 0, carry);
+    fe_fold_carry(r, carry);
     fe_reduce_p(r);
 }
-
 __device__ void fe_mul(fe* r, const fe* a, const fe* b) {
     u64 t[8]; for (int i = 0; i < 8; i++) t[i] = 0;
     for (int i = 0; i < 4; i++) {
-        unsigned __int128 carry = 0;
-        for (int j = 0; j < 4; j++) {
-            unsigned __int128 cur = (unsigned __int128)a->n[i]*b->n[j] + t[i+j] + carry;
-            t[i+j] = (u64)cur; carry = cur >> 64;
-        }
-        t[i+4] = (u64)carry;
+        u64 carry = 0;
+        for (int j = 0; j < 4; j++) t[i+j] = mul_acc(a->n[i], b->n[j], t[i+j], carry);
+        t[i+4] = carry;
     }
     fe_reduce512(r, t);
 }
@@ -882,11 +874,8 @@ __device__ void pubkey_xy(const u64 k[4], u8 out[64]) {
 
 // r = (a + b) mod n, all as big-endian 32-byte; returns 1 if result != 0.
 __device__ void scalar_add_modn(const u64 a[4], const u64 b[4], u64 r[4]) {
-    unsigned __int128 carry = 0;
-    for (int i = 0; i < 4; i++) {
-        unsigned __int128 cur = (unsigned __int128)a[i] + b[i] + carry;
-        r[i] = (u64)cur; carry = cur >> 64;
-    }
+    u64 carry = 0;
+    for (int i = 0; i < 4; i++) r[i] = add_carry(a[i], b[i], carry);
     if (carry || ge256(r, N)) sub256(r, r, N);
 }
 
@@ -986,25 +975,23 @@ __device__ int bip39_checksum_ok(const unsigned short idx[12]) {
 // candidate indices are compacted into `survivors` via an atomic counter, so the
 // heavy second pass runs with no warp divergence.
 extern "C" __global__
-void k_filter(const unsigned short* cand, u32 n, u32* survivors, u32* counter) {
+void k_filter(const unsigned short* cand, u32 n, u32* survivors, u32* counter, u32 check) {
     u32 i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    if (bip39_checksum_ok(cand + (u64)i * 12)) {
+    if (!check || bip39_checksum_ok(cand + (u64)i * 12)) {
         u32 slot = atomicAdd(counter, 1u);
         survivors[slot] = i;
     }
 }
 
-// Pass 2: full derivation for each compacted survivor. Thread t handles
+// Pass 2: BIP-39 seed for each compacted survivor. Thread t handles
 // survivors[t]; every thread does real work.
 extern "C" __global__
-void k_pipeline(const unsigned short* cand, const u32* survivors, u32 count,
-                const u8* wordlist, const u8* word_lens, u32 word_stride,
-                const u8* target_addr,
-                unsigned int* found_flag, unsigned int* found_idx) {
+void k_candidate_seeds(const unsigned short* cand, const u32* survivors, u32 count,
+                       const u8* wordlist, const u8* word_lens, u32 word_stride,
+                       u8* seeds) {
     u32 t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= count) return;
-    if (*found_flag) return;
 
     u32 i = survivors[t];
     const unsigned short* idx = cand + (u64)i * 12;
@@ -1020,17 +1007,26 @@ void k_pipeline(const unsigned short* cand, const u32* survivors, u32 count,
         if (w < 11) msg[mlen++] = ' ';
     }
 
-    u8 seed[64];
     const u8 salt[8] = {'m','n','e','m','o','n','i','c'};
-    pbkdf2_hmac_sha512_64(msg, mlen, salt, 8, 2048, seed);
+    pbkdf2_hmac_sha512_64(msg, mlen, salt, 8, 2048, seeds + (u64)t * 64);
+}
 
+// Keep the expensive PBKDF2 launch independent of the register requirements of
+// curve arithmetic. The same stream orders seed writes before address reads.
+extern "C" __global__
+void k_seed_addresses(const u8* seeds, const u32* survivors, u32 count,
+                      const u8* target_addr,
+                      unsigned int* found_flag, unsigned int* found_idx) {
+    u32 t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= count) return;
+    if (*found_flag) return;
     u8 addr[20];
-    seed_to_eth_address(seed, addr);
+    seed_to_eth_address(seeds + (u64)t * 64, addr);
 
     int eq = 1;
     for (int j = 0; j < 20; j++) if (addr[j] != target_addr[j]) { eq = 0; break; }
     if (eq) {
-        if (atomicCAS(found_flag, 0u, 1u) == 0u) *found_idx = i;
+        if (atomicCAS(found_flag, 0u, 1u) == 0u) *found_idx = survivors[t];
     }
 }
 
@@ -1145,4 +1141,24 @@ void k_scalar_add(const u8* a, const u8* b, u8* out, u32 n) {
     u8* o = out + (u64)i*32;
     for (int j = 0; j < 4; j++)
         for (int k = 0; k < 8; k++) o[j*8 + k] = (u8)(lr[3-j] >> (56 - k*8));
+}
+
+// Arithmetic regression kernels with the same binary signature for the oracle.
+extern "C" __global__
+void k_fe_add(const u8* a, const u8* b, u8* out, u32 n) {
+    u32 i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= n) return;
+    fe x, y, r; be32_to_limbs(a + (u64)i*32, x.n); be32_to_limbs(b + (u64)i*32, y.n);
+    fe_add(&r, &x, &y); limbs_to_be32(r.n, out + (u64)i*32);
+}
+extern "C" __global__
+void k_fe_sub(const u8* a, const u8* b, u8* out, u32 n) {
+    u32 i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= n) return;
+    fe x, y, r; be32_to_limbs(a + (u64)i*32, x.n); be32_to_limbs(b + (u64)i*32, y.n);
+    fe_sub(&r, &x, &y); limbs_to_be32(r.n, out + (u64)i*32);
+}
+extern "C" __global__
+void k_fe_inverse_check(const u8* a, const u8* unused, u8* out, u32 n) {
+    u32 i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= n) return;
+    fe x, r; be32_to_limbs(a + (u64)i*32, x.n);
+    fe_inv(&r, &x); limbs_to_be32(r.n, out + (u64)i*32);
 }

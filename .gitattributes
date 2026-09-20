@@ -1,0 +1,2 @@
+# Evidence hashes and checkpoint fingerprints depend on these exact bytes.
+history/** -text

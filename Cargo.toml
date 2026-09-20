@@ -3,15 +3,37 @@ name = "words-breaker"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["cuda"]
+cuda = ["dep:cust", "dep:num-bigint"]
+
 [dependencies]
 # Used for secp256k1 and BIP32 only; the address stage is Ethereum's (see src/eth.rs).
 bitcoin = { version = "0.32", features = ["std"] }
 sha3 = "0.10"
 bip39 = { version = "2.0", features = ["all-languages"] }
 clap = { version = "4.5", features = ["derive"] }
-itertools = "0.13"
- anyhow = "1.0"
+anyhow = "1.0"
 rayon = "1.10"
 num_cpus = "1.16"
-cust = "0.3"
+cust = { version = "0.3", optional = true }
 hex = "0.4"
+unicode-normalization = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+num-bigint = { version = "0.4", optional = true }
+
+[dev-dependencies]
+itertools = "0.13"
+
+[[bench]]
+name = "candidates"
+harness = false
+
+[[bench]]
+name = "pruning_counts"
+harness = false
+
+[[bench]]
+name = "history_filter"
+harness = false

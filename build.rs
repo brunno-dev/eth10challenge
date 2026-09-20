@@ -14,20 +14,28 @@ const ARCH: &str = "sm_86";
 fn main() {
     println!("cargo:rerun-if-changed={CUDA_SRC}");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=NVCC");
+    println!("cargo:rerun-if-env-changed=CUDA_ARCH");
+    if std::env::var_os("CARGO_FEATURE_CUDA").is_none() {
+        return;
+    }
 
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
     let ptx_path = out_dir.join("kernels.ptx");
 
     let nvcc = std::env::var("NVCC").unwrap_or_else(|_| "nvcc".to_string());
+    let arch = std::env::var("CUDA_ARCH").unwrap_or_else(|_| ARCH.to_string());
 
     let status = Command::new(&nvcc)
-        .args(["--ptx", "-arch", ARCH, "-o"])
+        .args(["--ptx", "-arch", &arch, "-o"])
         .arg(&ptx_path)
         .arg(CUDA_SRC)
         // -lineinfo keeps PTX debuggable without disabling optimization.
         .arg("-lineinfo")
         .status()
-        .unwrap_or_else(|e| panic!("failed to invoke `{nvcc}`: {e}. Is the CUDA toolkit installed?"));
+        .unwrap_or_else(|e| {
+            panic!("failed to invoke `{nvcc}`: {e}. Is the CUDA toolkit installed?")
+        });
 
     if !status.success() {
         panic!("`{nvcc} --ptx {CUDA_SRC}` failed (see errors above)");

@@ -1,0 +1,16 @@
+{
+  "source_repository": "https://github.com/floflo777/open-crypto-puzzles",
+  "source_commit": "740c58b027061090136b9145b6c079734ed58602",
+  "source_path": "1-big-prizes/guntis-vitolins-metamask-8-6eth/data/video-onscreen-words.json",
+  "published_on": "2026-09-07",
+  "reviewed_on": "2026-09-19",
+  "sha256": "dd29421dfe335d15fb8947cc0c875b87a648c14c6b82de378e9c8dea05d27088",
+  "attribution": "cjmcdaniel; floflo777/open-crypto-puzzles contributors",
+  "license": "CC BY 4.0; see ../ro1/LICENSE",
+  "status": "candidate_words_only",
+  "exclusion_model": null,
+  "onscreen_count": 109,
+  "spoken_count": 110,
+  "distinct_count": 192,
+  "note": "Occurrences in the video are hypotheses, not confirmed mnemonic members. No completed negative sweep was published with these lists. Keep the original RO1 evidence and rule unchanged."
+}

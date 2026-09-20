@@ -1,0 +1,7 @@
+"Trial","Case","Seconds","Backend","Candidates","Excluded","Pruned"
+"1","prefix-pruning","0.323302","CUDA","151200","136080","136070"
+"1","phrase-filter-only","0.331109","CUDA","151200","136080","0"
+"2","phrase-filter-only","0.347818","CUDA","151200","136080","0"
+"2","prefix-pruning","0.345196","CUDA","151200","136080","136070"
+"3","prefix-pruning","0.316685","CUDA","151200","136080","136070"
+"3","phrase-filter-only","0.329167","CUDA","151200","136080","0"

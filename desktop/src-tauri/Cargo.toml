@@ -1,0 +1,20 @@
+[package]
+name = "eth-search-studio"
+version = "0.1.0"
+description = "Desktop companion for the ETH word-search engine"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+rfd = { version = "0.16", default-features = false }
+time = { version = "0.3", features = ["formatting"] }
+same-file = "1.0.6"
+tiny_http = "0.12"
+getrandom = "0.3"
+bip39 = "2"
+rwml = "=0.1.4"

@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "source_repository": "https://github.com/floflo777/open-crypto-puzzles",
+  "source_commit": "4b7d48a110d4bfce0dea711f8e7935cd76b202a4",
+  "imported_on": "2026-09-06",
+  "attribution": "floflo777/open-crypto-puzzles contributors; snapshots unchanged, local catalog and matcher added",
+  "target": "0x9c2f44efad0c1e852a09df9939e6daf061140caf",
+  "language": "english",
+  "derivation_path": "m/44'/60'/0'/0/0",
+  "passphrase": "",
+  "checksum": "required",
+  "evidence": [
+    {
+      "file": "ro1/author-posts.md",
+      "sha256": "642486f41731c0d945af90731f5da9c35283932a86253e67fb2207c773926c72"
+    },
+    {
+      "file": "ro1/LICENSE",
+      "sha256": "fc6a6326131cd2f916dad66cffc42ff98b0d5fb20d4f81fd55c149aeb773de84"
+    },
+    {
+      "file": "ro1/LICENSE-CODE",
+      "sha256": "0e3250bd09cde581873080699e534c4dd98ba95ff328bdcdc40d8855d3802216"
+    },
+    {
+      "file": "ro1/reading-order-pool.json",
+      "sha256": "48d5cf07a48cb67808820e87a0a32d1342161ce4ce9e16b533938d175d0943a2"
+    },
+    {
+      "file": "ro1/sweep_reading_order.py",
+      "sha256": "1bfe8041f4daedc4fcda37c45bb7067e37dc2646e205dc66b61401f0501c107f"
+    },
+    {
+      "file": "ro1/tested.md",
+      "sha256": "6dac38107056e2a8a9d1352c2da949d7e9d590df219719b1ffd2bbde76922eda"
+    }
+  ],
+  "entries": [
+    {
+      "id": "P1",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "See archived tested.md; exact domain not reconstructed, no automatic exclusion."
+    },
+    {
+      "id": "G1",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "See archived tested.md; exact domain not reconstructed, no automatic exclusion."
+    },
+    {
+      "id": "R1",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "See archived tested.md; exact domain not reconstructed, no automatic exclusion."
+    },
+    {
+      "id": "R2-minus-R1",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "See archived tested.md; exact domain not reconstructed, no automatic exclusion."
+    },
+    {
+      "id": "S1",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "See archived tested.md; exact domain not reconstructed, no automatic exclusion."
+    },
+    {
+      "id": "R1b",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "See archived tested.md; exact domain not reconstructed, no automatic exclusion."
+    },
+    {
+      "id": "RO1",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": "ro1-membership-v1",
+      "note": "Exact source-order domain; 167688000 reported arrangements, 10484919 reported checksum survivors. Cross-source repeated words allowed."
+    },
+    {
+      "id": "RO2",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "See archived tested.md; exact domain not reconstructed, no automatic exclusion."
+    },
+    {
+      "id": "C1",
+      "result": "negative",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "All 12 words distinct. Exact generator inputs not imported; reference only."
+    },
+    {
+      "id": "likelihood-ordered",
+      "result": "incomplete",
+      "verification": "external_report",
+      "exclusion_model": null,
+      "note": "Interrupted run; never eligible for negative coverage."
+    }
+  ]
+}

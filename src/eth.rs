@@ -13,6 +13,27 @@ use sha3::{Digest, Keccak256};
 /// Ledger Live, Trust, ...). Coin type 60 is the only difference from Bitcoin.
 pub const ETH_PATH: &str = "m/44'/60'/0'/0/0";
 
+/// Validate directly on word indices, before any strings or mnemonic parsing.
+pub fn checked_entropy(indices: &[u16; 12]) -> Option<[u8; 16]> {
+    use bitcoin::hashes::{sha256, Hash};
+    let mut entropy = [0u8; 16];
+    let (mut acc, mut bits, mut out) = (0u32, 0u32, 0usize);
+    for &word in indices {
+        if word >= 2048 {
+            return None;
+        }
+        acc = (acc << 11) | u32::from(word);
+        bits += 11;
+        while bits >= 8 {
+            bits -= 8;
+            entropy[out] = (acc >> bits) as u8;
+            out += 1;
+        }
+    }
+    let digest = sha256::Hash::hash(&entropy).to_byte_array();
+    ((indices[11] & 15) == u16::from(digest[0] >> 4)).then_some(entropy)
+}
+
 /// Ethereum's hash. Note this is original Keccak, *not* NIST SHA-3 — they differ
 /// only in a padding byte, but every digest differs.
 pub fn keccak256(data: &[u8]) -> [u8; 32] {
@@ -28,7 +49,10 @@ pub fn keccak256(data: &[u8]) -> [u8; 32] {
 /// after an address that no mnemonic can produce, and it would run to completion
 /// before saying so.
 pub fn parse_address(s: &str) -> Result<[u8; 20]> {
-    let body = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let body = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     if body.len() != 40 || !body.chars().all(|c| c.is_ascii_hexdigit()) {
         bail!("target must be a 40-character hex Ethereum address (got {s:?})");
     }
@@ -57,7 +81,11 @@ pub fn to_eip55(addr: &[u8; 20]) -> String {
     out.push_str("0x");
     for (i, c) in lower.chars().enumerate() {
         // Nibble i of the hash decides the case of hex character i.
-        let nibble = if i % 2 == 0 { hash[i / 2] >> 4 } else { hash[i / 2] & 0x0f };
+        let nibble = if i % 2 == 0 {
+            hash[i / 2] >> 4
+        } else {
+            hash[i / 2] & 0x0f
+        };
         if c.is_ascii_alphabetic() && nibble >= 8 {
             out.push(c.to_ascii_uppercase());
         } else {
@@ -90,6 +118,27 @@ pub fn address_from_seed<C: Signing>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn index_checksum_agrees_with_bip39() {
+        use bip39::{Language, Mnemonic};
+        for &lang in Language::ALL {
+            for byte in 0..=255u8 {
+                let entropy = [byte; 16];
+                let m = Mnemonic::from_entropy_in(lang, &entropy).unwrap();
+                let mut indices: [u16; 12] = m
+                    .word_indices()
+                    .map(|i| i as u16)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap();
+                assert_eq!(checked_entropy(&indices), Some(entropy));
+                indices[11] ^= 1;
+                assert_eq!(checked_entropy(&indices), None);
+            }
+        }
+        assert_eq!(checked_entropy(&[2048; 12]), None);
+    }
 
     // Vectors below were produced by an independent pure-Python implementation
     // (hand-rolled Keccak-f[1600] and secp256k1), not by this code path.
@@ -126,9 +175,18 @@ mod tests {
     fn parse_accepts_any_uniform_case_and_rejects_bad_checksum() {
         let want = parse_address("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed").unwrap();
         // All-lower, all-upper and no-prefix carry no checksum, so all are accepted.
-        assert_eq!(parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed").unwrap(), want);
-        assert_eq!(parse_address("0X5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED").unwrap(), want);
-        assert_eq!(parse_address("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed").unwrap(), want);
+        assert_eq!(
+            parse_address("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed").unwrap(),
+            want
+        );
+        assert_eq!(
+            parse_address("0X5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED").unwrap(),
+            want
+        );
+        assert_eq!(
+            parse_address("5aaeb6053f3e94c9b9a09f33669435e7ef1beaed").unwrap(),
+            want
+        );
         // Mixed case with a flipped letter must be rejected.
         assert!(parse_address("0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD").is_err());
         assert!(parse_address("0xdeadbeef").is_err());

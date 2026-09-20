@@ -1,0 +1,55 @@
+ETH SEARCH STUDIO
+
+Abra "ETH Search Studio.exe" com dois cliques.
+Mantenha a pasta "engine" ao lado do aplicativo.
+
+1. Preencha o endereço e as palavras, ou use "Carregar exemplo" para conhecer a tela.
+2. Escolha o limite de candidatos e inicie a busca.
+3. "Pausar" aguarda o lote em andamento e salva o progresso.
+4. Use "Continuar" no histórico para retomar uma busca pausada ou limitada.
+
+IMPORTAR UMA LISTA
+Na aba "Importar arquivo", selecione um TXT, DOC ou DOCX de até 10 MB e 100.000 linhas.
+Use 12 palavras por linha (no Word, pressione Enter entre as listas).
+Há um exemplo em "exemplo-lista.txt"; suas palavras são apenas hipóteses.
+Cada linha deve conter dutch, fog e parrot, em qualquer ordem.
+Neste modo o código fixa dutch na posição 1, fog na 5 e parrot na 12.
+As outras nove palavras são permutadas sem separar post e vídeo.
+Confira a prévia e clique "Iniciar fila". Linhas inválidas/repetidas são ignoradas.
+A fila retoma limites automaticamente e só avança depois de esgotar a linha.
+Pausar/fechar salva o ponto atual; ao reabrir, use "Continuar fila".
+Um acerto ou erro interrompe a fila. "Encerrar fila" mantém o histórico salvo.
+
+PISTAS DO VIDEO E CHECKSUM
+Abra "Pistas novas do vídeo" e escolha moedas, tela, fala ou a união das listas.
+"Adicionar ao vídeo" preserva suas listas e posições; complete também o post.
+São candidatas, não palavras confirmadas ou buscas negativas. Nada inicia sozinho.
+As listas estão incluídas no aplicativo e funcionam sem conexão com a internet.
+O monitor e o histórico identificam se a busca exigiu checksum válido.
+Para uma busca concluída ou já coberta, "Preparar esta busca sem checksum" cria
+uma nova configuração com as mesmas palavras e posições. Clique Iniciar para rodar.
+Esse modo pode exigir cerca de 16 vezes mais derivações; RO1 fica desativado.
+O histórico automático só reaproveita registros da mesma política. A busca antiga
+continua salva. Em uma execução de arquivo, o atalho prepara somente aquela linha.
+
+O exemplo usa dados sintéticos e endereço zero. Ele não é uma solução do desafio.
+Nenhuma busca é iniciada automaticamente ao abrir o aplicativo.
+
+Os dados das execuções são salvos localmente em:
+%LOCALAPPDATA%\dev.ethsearch.studio\runs
+O botão para abrir a pasta da execução mostra seus checkpoints e métricas.
+
+O histórico automático fica em %LOCALAPPDATA%\dev.ethsearch.studio\history.
+Execuções anteriores confirmadas são importadas automaticamente.
+Buscas pausadas ou limitadas guardam somente o trecho já confirmado.
+Novas buscas filtram sequências já verificadas, inclusive ao liberar posições.
+Uma busca totalmente coberta pelo histórico é bloqueada como "Já testada".
+Mantenha essa pasta para aproveitar o histórico nas próximas buscas.
+
+A GPU NVIDIA é usada quando CUDA está disponível. O modo CPU também está disponível.
+O aplicativo usa o Microsoft Edge WebView2 instalado no Windows.
+Ao fechar durante uma busca, aguarde a pausa e a gravação do checkpoint.
+
+Integração com LLM: o projeto inclui um servidor MCP em mcp/README.md,
+com configurações para Codex e Claude Desktop. As buscas da LLM aparecem
+nesta interface e compartilham o histórico. Mantenha o aplicativo aberto.
