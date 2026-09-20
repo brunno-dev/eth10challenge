@@ -21,6 +21,9 @@ pub struct SearchMetrics {
     pub transfer_seconds: f64,
     pub filter_seconds: f64,
     pub derive_seconds: f64,
+    /// CUDA event intervals; subsets of derive_seconds, absent on CPU.
+    pub gpu_seed_seconds: Option<f64>,
+    pub gpu_address_seconds: Option<f64>,
     pub checkpoint_seconds: f64,
     pub min_batch_size: Option<usize>,
     pub max_batch_size: Option<usize>,
@@ -117,8 +120,13 @@ impl SearchMetrics {
             self.checkpoint_seconds,
         );
         println!(
-            "CPU derive includes checksum and derivation together. GPU stages are host wall-clock intervals including synchronization, not exclusive kernel times from CUDA events. A batch containing a hit is not counted."
+            "CPU derive includes checksum and derivation together. Stage seconds are host wall-clock intervals including synchronization. A batch containing a hit is not counted."
         );
+        if let (Some(seed), Some(address)) = (self.gpu_seed_seconds, self.gpu_address_seconds) {
+            println!(
+                "CUDA event seconds: seed/PBKDF2 {seed:.6}, address/BIP32 {address:.6}. These are parts of derive time, not additional stages."
+            );
+        }
         if let (Some(min), Some(max)) = (self.min_batch_size, self.max_batch_size) {
             println!(
                 "Requested batch sizes: {min}..{max}; {} adaptive changes.",
@@ -189,6 +197,8 @@ mod tests {
         assert_eq!(metrics.min_batch_size, Some(16));
         assert_eq!(metrics.max_batch_size, Some(128));
         assert_eq!(metrics.adaptive_changes, 0);
+        assert_eq!(metrics.gpu_seed_seconds, None);
+        assert_eq!(metrics.gpu_address_seconds, None);
     }
 
     #[test]

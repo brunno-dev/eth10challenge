@@ -272,6 +272,9 @@ fn spawn_worker(app: AppHandle) {
     std::thread::spawn(move || {
         let result = work(&app);
         let state = app.state::<Studio>();
+        // work returns only after the active invocation has persisted its final
+        // state. Release CUDA on completion, pause, cancellation and failure.
+        state.release_resident();
         if let Ok(mut inner) = state.lock() {
             inner.queue_worker = false;
             let current_run = inner
@@ -308,6 +311,7 @@ fn spawn_worker(app: AppHandle) {
 }
 
 fn work(app: &AppHandle) -> UiResult<()> {
+    let mut launched_id: Option<String> = None;
     loop {
         let state = app.state::<Studio>();
         // Reserve the row/run identity durably before launch. This lets recovery
@@ -357,6 +361,12 @@ fn work(app: &AppHandle) -> UiResult<()> {
                             (run.clone(), true)
                         }
                         "failed" => {
+                            // A job accepted by the worker is never retried
+                            // silently. The user may explicitly resume this
+                            // queue, reusing its last confirmed checkpoint.
+                            if launched_id.as_ref() == Some(&run.id) {
+                                return Err(run.error.clone().unwrap_or_else(|| "O motor falhou; continue a fila para retomar o checkpoint confirmado.".into()));
+                            }
                             if checkpoint_counts(&state.run_dir(&run.id)?).is_some() {
                                 row.status = "running".into();
                                 (run.clone(), true)
@@ -406,6 +416,7 @@ fn work(app: &AppHandle) -> UiResult<()> {
             next
         };
         let next_id = next.0.id.clone();
+        launched_id = Some(next_id.clone());
         if let Err(error) = launch(app, next.0, next.1) {
             let mut inner = state.lock()?;
             if inner.queue.as_ref().is_some_and(|q| q.status != "running") {

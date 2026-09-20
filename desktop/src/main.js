@@ -77,7 +77,7 @@ document.querySelector('#app').innerHTML = `
         <div class="monitor-stats"><div><span>Velocidade</span><strong id="rate-value">—</strong><small>candidatos / segundo</small></div><div><span>Excluídos pelo histórico</span><strong id="excluded-value">—</strong><small>trabalho reaproveitado</small></div><div><span>Espaço de busca</span><strong id="total-value">—</strong><small id="total-caption">aguardando configuração</small></div><div><span>Tempo de execução</span><strong id="elapsed-value">—</strong><small>tempo informado pelo motor</small></div></div>
         <div id="progress-section" class="progress-section" hidden><div><span>Espaço percorrido</span><strong id="progress-label">0%</strong></div><div id="progressbar" class="progress-track" role="progressbar" aria-label="Espaço de busca percorrido" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div></div>
         <div id="run-error" class="run-error" role="alert" hidden></div>
-        <div id="metrics-section" class="metrics-section" hidden><div class="subsection-title">TEMPO POR ETAPA <span>SEGUNDOS</span></div><dl id="stage-metrics"></dl><p>Etapas podem se sobrepor. Os tempos não são somáveis.</p></div>
+        <div id="metrics-section" class="metrics-section" hidden><div class="subsection-title">TEMPO POR ETAPA <span>SEGUNDOS</span></div><dl id="stage-metrics"></dl><p>Etapas podem se sobrepor. Seed e endereço detalham a derivação na GPU; não são tempos adicionais.</p></div>
         <section class="activity-section" aria-label="Atividade do motor"><div class="activity-heading"><h3>Atividade</h3><span id="log-state">AGUARDANDO</span></div><p id="latest-log" class="latest-log">As mensagens da execução aparecerão aqui.</p><details class="log-details"><summary>Ver log completo <span id="log-count">0 linhas</span></summary><pre id="run-logs" tabindex="0" aria-label="Log da execução">Nenhuma execução iniciada.</pre></details></section>
         <footer class="monitor-footer"><span class="local-dot"></span><span id="engine-label">Verificando motor local…</span><span class="footer-cross" aria-hidden="true">+</span></footer>
       </aside>
@@ -212,9 +212,9 @@ function displayDuration(seconds) {
 function renderMetrics(metrics) {
   $('metrics-section').hidden = !metrics;
   if (!metrics) return;
-  const names = { producer_seconds: 'Geração', wait_seconds: 'Espera', transfer_seconds: 'Transferência', filter_seconds: 'Checksum', derive_seconds: 'Derivação', checkpoint_seconds: 'Progresso salvo' };
+  const names = { producer_seconds: 'Geração', wait_seconds: 'Espera', transfer_seconds: 'Transferência', filter_seconds: 'Checksum', derive_seconds: 'Derivação total', gpu_seed_seconds: 'Seed / PBKDF2 (GPU)', gpu_address_seconds: 'Endereço / BIP32 (GPU)', checkpoint_seconds: 'Progresso salvo' };
   $('stage-metrics').replaceChildren(...Object.entries(names).flatMap(([key, label]) => {
-    if (!Number.isFinite(Number(metrics[key]))) return [];
+    if (metrics[key] == null || !Number.isFinite(Number(metrics[key]))) return [];
     const dt = document.createElement('dt'); dt.textContent = label;
     const dd = document.createElement('dd'); dd.textContent = Number(metrics[key]).toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
     return [dt, dd];

@@ -95,6 +95,10 @@ fn preflight(app: &AppHandle, config: SearchConfig) -> UiResult<Value> {
 }
 
 fn dispatch(app: &AppHandle, rpc: RpcRequest) -> UiResult<Value> {
+    #[cfg(debug_assertions)]
+    if rpc.method.starts_with("test_") {
+        return dispatch_test(app, rpc);
+    }
     match rpc.method.as_str() {
         "bootstrap" => {
             no_params(&rpc.params)?;
@@ -120,6 +124,115 @@ fn dispatch(app: &AppHandle, rpc: RpcRequest) -> UiResult<Value> {
             serde_json::to_value(pause_search(app.state::<Studio>())?).map_err(|e| e.to_string())
         }
         _ => Err("Método de controle desconhecido.".into()),
+    }
+}
+
+// These wrappers exist only in a debug build and an explicitly isolated test
+// session. Production MCP keeps its existing control surface and no file API.
+#[cfg(debug_assertions)]
+pub(super) fn verify_test_directory(actual: &Path, normal: &Path) -> UiResult<()> {
+    if std::env::var_os("ETH_STUDIO_DATA_DIR").is_none() || !actual.is_absolute() {
+        return Err("O harness precisa de ETH_STUDIO_DATA_DIR absoluto e isolado.".into());
+    }
+    test_directories_disjoint(actual, normal)
+}
+
+#[cfg(any(debug_assertions, test))]
+fn test_directories_disjoint(actual: &Path, normal: &Path) -> UiResult<()> {
+    let actual = actual.canonicalize().map_err(|e| {
+        format!("Crie a pasta descartável do harness antes de abrir o aplicativo: {e}")
+    })?;
+    // same_file resolves Windows casing, verbatim prefixes and junctions.
+    // Reject both descendants and ancestors of the ordinary app data folder.
+    for ancestor in normal.ancestors().filter(|path| path.exists()) {
+        if same_file::is_same_file(&actual, ancestor).map_err(|e| e.to_string())? {
+            return Err("A pasta do harness sobrepõe os dados reais do aplicativo.".into());
+        }
+    }
+    if normal.exists() {
+        for ancestor in actual.ancestors() {
+            if same_file::is_same_file(ancestor, normal).map_err(|e| e.to_string())? {
+                return Err("A pasta do harness sobrepõe os dados reais do aplicativo.".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn dispatch_test(app: &AppHandle, rpc: RpcRequest) -> UiResult<Value> {
+    if std::env::var("ETH_STUDIO_TEST_MODE").as_deref() != Ok("resident-queue-v1") {
+        return Err("O harness de integração não está habilitado.".into());
+    }
+    let state = app.state::<Studio>();
+    let data = state
+        .runs_dir
+        .parent()
+        .ok_or("Diretório de teste indisponível.")?;
+    verify_test_directory(
+        data,
+        &app.path().app_local_data_dir().map_err(|e| e.to_string())?,
+    )?;
+    match rpc.method.as_str() {
+        "test_state" => {
+            no_params(&rpc.params)?;
+            let queue_worker = state.lock()?.queue_worker;
+            Ok(
+                serde_json::json!({"dataDir":data, "queueWorker":queue_worker, "state":refresh(&state)?}),
+            )
+        }
+        "test_import_word_bytes" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Import {
+                filename: String,
+                bytes: Vec<u8>,
+            }
+            let params = decode::<Import>(rpc.params)?;
+            serde_json::to_value(tauri::async_runtime::block_on(
+                file_queue::import_word_bytes(app.clone(), params.filename, params.bytes),
+            )?)
+            .map_err(|e| e.to_string())
+        }
+        "test_start_file_queue" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct Start {
+                config: SearchConfig,
+                import_id: String,
+            }
+            let params = decode::<Start>(rpc.params)?;
+            if !params.config.exclude_records.is_empty() {
+                return Err("O harness não aceita arquivos de histórico externos.".into());
+            }
+            serde_json::to_value(tauri::async_runtime::block_on(
+                file_queue::start_file_queue(app.clone(), params.config, params.import_id),
+            )?)
+            .map_err(|e| e.to_string())
+        }
+        "test_pause_file_queue" | "test_resume_file_queue" | "test_cancel_file_queue" => {
+            no_params(&rpc.params)?;
+            let queue = match rpc.method.as_str() {
+                "test_pause_file_queue" => file_queue::pause_file_queue(state)?,
+                "test_resume_file_queue" => file_queue::resume_file_queue(app.clone())?,
+                _ => file_queue::cancel_file_queue(state)?,
+            };
+            serde_json::to_value(queue).map_err(|e| e.to_string())
+        }
+        "test_shutdown" => {
+            no_params(&rpc.params)?;
+            // Follow the window's close path: active work pauses, checkpoints,
+            // and closes through finish(); idle shutdown releases the worker.
+            if !defer_close(app) {
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    app.exit(0);
+                });
+            }
+            Ok(serde_json::json!({"closing":true}))
+        }
+        _ => Err("Método de teste desconhecido.".into()),
     }
 }
 
@@ -300,6 +413,26 @@ pub(super) fn cleanup(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integration_directory_must_be_physically_disjoint_from_real_data() {
+        let base = std::env::temp_dir().join(format!("bridge-isolation-{}", unique_id()));
+        let normal = base.join("normal");
+        let nested = normal.join("nested");
+        let isolated = base.join("isolated");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir(&isolated).unwrap();
+        assert!(test_directories_disjoint(&normal, &normal).is_err());
+        assert!(test_directories_disjoint(&nested, &normal).is_err());
+        assert!(test_directories_disjoint(&base, &normal).is_err());
+        assert!(test_directories_disjoint(&isolated, &normal).is_ok());
+        #[cfg(windows)]
+        assert!(test_directories_disjoint(&normal.canonicalize().unwrap(), &normal).is_err());
+        fs::remove_dir(nested).unwrap();
+        fs::remove_dir(normal).unwrap();
+        fs::remove_dir(isolated).unwrap();
+        fs::remove_dir(base).unwrap();
+    }
 
     #[test]
     fn requires_exact_host_bearer_and_no_browser_origin() {

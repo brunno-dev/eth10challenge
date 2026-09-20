@@ -28,6 +28,7 @@ rayon path. See README.md for the full flag table.
 | `src/gpu.rs` | CUDA host side: batching, producer thread, checksum pre-filter, `--selftest` |
 | `src/cuda/kernels.cu` | Crypto primitives; `k_filter`, `k_candidate_seeds`, `k_seed_addresses` |
 | `src/eth.rs` | CPU reference implementation (also the selftest oracle) |
+| `src/worker.rs`, `src/output.rs` | Sequential JSONL worker and correlated diagnostics; CUDA session stays on one thread |
 
 Derivation is fixed at `m/44'/60'/0'/0/0`, no BIP-39 passphrase.
 
@@ -54,9 +55,10 @@ The author's newly reported negative searches and sweep are linked in
   miscompiles PBKDF2 and the seed comes out wrong — but the standalone kernels
   stayed correct while real searches silently found nothing. The current
   selftest also checks the complete search pipeline. Preserve the guards.
-- **PBKDF2-HMAC-SHA512 is ~92–94% of GPU time** (2048 iterations, fixed by
-  BIP-39). secp256k1 + the address hash are single-digit percent, so optimizing
-  them caps out around a 1.06x total win. Profile first; check
+- **PBKDF2-HMAC-SHA512 dominates derivation** (2048 iterations, fixed by
+  BIP-39). The historical estimate was 92–94%; current RTX 3060 Laptop CUDA
+  events measure about 89% seed / 11% address across the two kernels, not total
+  process wall time. See `history/GPU-RESIDENT.md`. Profile first; check
   `ptxas --verbose` after touching search kernels (historical RTX 3050 baseline:
   2720-byte frame, 128 registers, 0 spills).
 - **WSL copy artifacts**: this tree came from Windows. `target/` build scripts
@@ -67,6 +69,10 @@ The author's newly reported negative searches and sweep are linked in
   word requires repeated pool entries; additional fill positions may repeat.
 - Current Windows measurements and rejected experiments are in `BENCHMARKS.md`.
   The 16-round SHA-512 loop experiment was slower; retain the 80-round unroll.
+- The resident worker only caches CUDA infrastructure. Every job reloads its
+  inputs and compatible history. EOF requests a stop; a failed GPU search
+  invalidates the session. Never automatically replay an uncertain job or
+  turn a hit/interrupted batch into negative evidence. See `docs/RESIDENT-WORKER.md`.
 
 ## Cost model
 

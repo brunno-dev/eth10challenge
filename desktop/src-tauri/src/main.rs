@@ -11,6 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod engine_worker;
 mod file_import;
 mod file_queue;
 mod mcp_bridge;
@@ -109,6 +110,8 @@ struct Inner {
 
 struct Studio {
     inner: Mutex<Inner>,
+    // Used only by file queues, with one background request at a time.
+    resident: Mutex<Option<engine_worker::EngineWorker>>,
     // Serialize history migration and snapshot preparation across GUI and MCP.
     preparation: Mutex<()>,
     runs_dir: PathBuf,
@@ -152,6 +155,12 @@ fn managed_run_path(root: &Path, candidate: &Path) -> UiResult<PathBuf> {
 }
 
 impl Studio {
+    fn release_resident(&self) {
+        if let Ok(mut worker) = self.resident.lock() {
+            worker.take();
+        }
+    }
+
     fn lock(&self) -> UiResult<MutexGuard<'_, Inner>> {
         self.inner
             .lock()
@@ -734,42 +743,45 @@ fn pump(
                 Ok(line) => line,
                 Err(_) => break,
             };
-            let state = app.state::<Studio>();
-            let snapshot = {
-                let Ok(mut inner) = state.lock() else { break };
-                if !inner.active.as_ref().is_some_and(|run| run.id == id) {
-                    break;
-                }
-                let Inner {
-                    active, runtime, ..
-                } = &mut *inner;
-                let (Some(run), Some(runtime)) = (active, runtime) else {
-                    break;
-                };
-                parse_line(run, runtime, &line);
-                push_log(
-                    run,
-                    if stderr {
-                        format!("[engine] {line}")
-                    } else {
-                        line
-                    },
-                );
-                update_timing(&mut inner);
-                inner.active.clone()
-            };
-            let _ = app.emit("run-updated", snapshot);
+            if !receive_engine_line(&app, &id, line, stderr) {
+                break;
+            }
         }
     })
 }
 
-fn finish(
-    app: &AppHandle,
-    id: &str,
-    dir: &Path,
-    metrics_path: &Path,
-    result: Result<std::process::ExitStatus, std::io::Error>,
-) {
+fn receive_engine_line(app: &AppHandle, id: &str, line: String, stderr: bool) -> bool {
+    let state = app.state::<Studio>();
+    let snapshot = {
+        let Ok(mut inner) = state.lock() else {
+            return false;
+        };
+        if !inner.active.as_ref().is_some_and(|run| run.id == id) {
+            return false;
+        }
+        let Inner {
+            active, runtime, ..
+        } = &mut *inner;
+        let (Some(run), Some(runtime)) = (active, runtime) else {
+            return false;
+        };
+        parse_line(run, runtime, &line);
+        push_log(
+            run,
+            if stderr {
+                format!("[engine] {line}")
+            } else {
+                line
+            },
+        );
+        update_timing(&mut inner);
+        inner.active.clone()
+    };
+    let _ = app.emit("run-updated", snapshot);
+    true
+}
+
+fn finish(app: &AppHandle, id: &str, dir: &Path, metrics_path: &Path, result: UiResult<()>) {
     let counts = checkpoint_counts(dir);
     let metrics = read_json(metrics_path);
     let stopped = dir.join("stop").exists();
@@ -787,17 +799,8 @@ fn finish(
             run.excluded = excluded.clone();
         }
         run.metrics = metrics;
-        let success = result.as_ref().is_ok_and(|status| status.success());
-        run.status = if !success {
-            run.error = Some(match result {
-                Ok(status) => format!(
-                    "O motor terminou com código {}. Confira o registro abaixo.",
-                    status
-                        .code()
-                        .map_or("desconhecido".into(), |code| code.to_string())
-                ),
-                Err(error) => format!("Não foi possível acompanhar o motor: {error}"),
-            });
+        run.status = if let Err(error) = result {
+            run.error = Some(error);
             "failed"
         } else if runtime.found {
             "found"
@@ -851,6 +854,7 @@ fn finish(
     };
     let _ = app.emit("run-updated", &snapshot);
     if close {
+        state.release_resident();
         app.exit(0);
     }
 }
@@ -971,6 +975,19 @@ fn launch(app: &AppHandle, mut run: RunSnapshot, resume: bool) -> UiResult<RunSn
                 .join(format!("{}.json", run.id))
                 .into_os_string(),
         ]);
+        if run.queue_id.is_some() {
+            // Run/history paths are canonical absolute paths. User-selected
+            // record files were copied into this run's snapshot during setup.
+            let args = args
+                .into_iter()
+                .map(|arg| {
+                    arg.into_string().map_err(|_| {
+                        "O motor residente requer caminhos Unicode válidos.".to_owned()
+                    })
+                })
+                .collect::<UiResult<Vec<_>>>()?;
+            return Ok((None, Some(args)));
+        }
         let mut command = Command::new(&state.engine);
         command
             .args(args)
@@ -979,12 +996,13 @@ fn launch(app: &AppHandle, mut run: RunSnapshot, resume: bool) -> UiResult<RunSn
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         hide_console(&mut command);
-        command
+        let child = command
             .spawn()
-            .map_err(|e| format!("Não foi possível iniciar o motor: {e}"))
+            .map_err(|e| format!("Não foi possível iniciar o motor: {e}"))?;
+        Ok((Some(child), None))
     })();
-    let mut child = match preparation {
-        Ok(child) => child,
+    let (child, resident_args) = match preparation {
+        Ok(process) => process,
         Err(error) => {
             let mut inner = state.lock()?;
             // The prepared run owns the copied exclusions and preflight total;
@@ -1003,11 +1021,52 @@ fn launch(app: &AppHandle, mut run: RunSnapshot, resume: bool) -> UiResult<RunSn
                 inner.close_when_done
             };
             if close {
+                state.release_resident();
                 app.exit(0);
             }
             return Err(error);
         }
     };
+    if let Some(args) = resident_args {
+        let handle = app.clone();
+        let id = run.id.clone();
+        std::thread::spawn(move || {
+            let state = handle.state::<Studio>();
+            let result = (|| -> UiResult<()> {
+                let mut resident = state
+                    .resident
+                    .lock()
+                    .map_err(|_| "A sessão do motor residente não está disponível.")?;
+                if resident.is_none() {
+                    let mut command = Command::new(&state.engine);
+                    command.arg("--worker").current_dir(&state.runs_dir);
+                    *resident = Some(engine_worker::EngineWorker::start(&mut command)?);
+                }
+                receive_engine_line(
+                    &handle,
+                    &id,
+                    format!(
+                        "Motor residente: processo {}.",
+                        resident.as_ref().unwrap().process_id()
+                    ),
+                    false,
+                );
+                let result = resident
+                    .as_mut()
+                    .unwrap()
+                    .execute(&id, &args, |line, stderr| {
+                        receive_engine_line(&handle, &id, line, stderr);
+                    });
+                if result.is_err() {
+                    resident.take();
+                }
+                result
+            })();
+            finish(&handle, &id, &dir, &metrics_path, result);
+        });
+        return Ok(run);
+    }
+    let mut child = child.expect("manual invocation owns its process");
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let output = pump(app.clone(), run.id.clone(), stdout, false);
@@ -1015,7 +1074,21 @@ fn launch(app: &AppHandle, mut run: RunSnapshot, resume: bool) -> UiResult<RunSn
     let handle = app.clone();
     let id = run.id.clone();
     std::thread::spawn(move || {
-        let result = child.wait();
+        let result = child
+            .wait()
+            .map_err(|error| format!("Não foi possível acompanhar o motor: {error}"))
+            .and_then(|status| {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "O motor terminou com código {}. Confira o registro abaixo.",
+                        status
+                            .code()
+                            .map_or("desconhecido".into(), |code| code.to_string())
+                    ))
+                }
+            });
         let _ = output.join();
         let _ = errors.join();
         finish(&handle, &id, &dir, &metrics_path, result);
@@ -1241,6 +1314,9 @@ fn defer_close(app: &AppHandle) -> bool {
             }
         }
     }
+    if !active {
+        state.release_resident();
+    }
     active
 }
 
@@ -1252,6 +1328,11 @@ fn main() {
             let app_data = std::env::var_os("ETH_STUDIO_DATA_DIR")
                 .map(PathBuf::from)
                 .unwrap_or(app_data);
+            #[cfg(debug_assertions)]
+            if std::env::var("ETH_STUDIO_TEST_MODE").as_deref() == Ok("resident-queue-v1") {
+                mcp_bridge::verify_test_directory(&app_data, &app.path().app_local_data_dir()?)?;
+                if let Some(window) = app.get_webview_window("main") { window.hide()?; }
+            }
             let runs_dir = app_data.join("runs");
             fs::create_dir_all(&runs_dir)?;
             // Acquire before inspecting or recovering any existing run state.
@@ -1305,6 +1386,7 @@ fn main() {
             inner.queue = file_queue::recover(&queue_path)?;
             app.manage(Studio {
                 inner: Mutex::new(inner),
+                resident: Mutex::new(None),
                 preparation: Mutex::new(()),
                 runs_dir,
                 engine,
@@ -1576,6 +1658,7 @@ mod tests {
         let lock_path = std::env::temp_dir().join(format!("studio-test-{}.lock", unique_id()));
         let state = Studio {
             inner: Mutex::new(Inner::default()),
+            resident: Mutex::new(None),
             preparation: Mutex::new(()),
             runs_dir: std::env::temp_dir(),
             engine: PathBuf::new(),

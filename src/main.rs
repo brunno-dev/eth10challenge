@@ -1,3 +1,13 @@
+// Route the existing diagnostics through JSONL when serving a resident worker.
+// Keeping these before the modules also captures logs from producer threads.
+macro_rules! println {
+    ($($arg:tt)*) => { crate::output::line(false, format_args!($($arg)*)) };
+}
+#[allow(unused_macros)] // Non-CUDA release builds currently have no stderr logs.
+macro_rules! eprintln {
+    ($($arg:tt)*) => { crate::output::line(true, format_args!($($arg)*)) };
+}
+
 use anyhow::{Context, Result};
 use bip39::{Language, Mnemonic};
 use bitcoin::bip32::DerivationPath;
@@ -16,12 +26,14 @@ mod gpu;
 mod history;
 mod local_history;
 mod metrics;
+mod output;
 mod plan;
 #[cfg(test)]
 mod plan_union_tests;
 mod pruning;
 #[cfg(test)]
 mod pruning_cursor_tests;
+mod worker;
 use unicode_normalization::UnicodeNormalization;
 
 use candidates::Slot;
@@ -188,7 +200,37 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsStr::new("--worker")])
+    {
+        if worker::run().is_err() {
+            // Broken protocol I/O is reported by the caller as process loss;
+            // do not let Rust's Result termination print an unframed error.
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let args = Args::parse();
+    execute(args, &mut Session::default())
+}
+
+/// A session is owned and used by the same OS thread throughout its lifetime.
+/// CUDA contexts, loaded kernels and the fixed-base table survive between jobs.
+#[derive(Default)]
+struct Session {
+    #[cfg(feature = "cuda")]
+    gpu: Option<gpu::Gpu>,
+    #[cfg(feature = "cuda")]
+    gpu_initialization_attempted: bool,
+    fatal: bool,
+}
+
+fn execute(args: Args, session: &mut Session) -> Result<()> {
+    anyhow::ensure!(
+        !session.fatal,
+        "The search session cannot be reused after a GPU failure"
+    );
 
     if args.list_history {
         println!("{}", history::CATALOG);
@@ -382,20 +424,28 @@ fn main() -> Result<()> {
     {
         // Only initialization failure falls back. A failure during a search is
         // propagated, leaving its checkpoint available instead of restarting.
+        if !args.cpu && !already_covered && !session.gpu_initialization_attempted {
+            session.gpu_initialization_attempted = true;
+            match gpu::Gpu::new() {
+                Ok(gpu) => {
+                    session.gpu = Some(gpu);
+                    println!("CUDA context initialized");
+                }
+                Err(e) => {
+                    eprintln!("CUDA initialization unavailable ({e:#}); using CPU");
+                }
+            }
+        } else if !args.cpu && !already_covered && session.gpu.is_some() {
+            println!("Reusing initialized CUDA context");
+        }
         let device = if args.cpu || already_covered {
             None
         } else {
-            match gpu::Gpu::new() {
-                Ok(gpu) => Some(gpu),
-                Err(e) => {
-                    eprintln!("CUDA initialization unavailable ({e:#}); using CPU");
-                    None
-                }
-            }
+            session.gpu.as_ref()
         };
         found = if let Some(gpu) = device {
-            search_gpu(
-                &gpu,
+            let result = search_gpu(
+                gpu,
                 &args,
                 &mut progress,
                 &slots,
@@ -403,7 +453,14 @@ fn main() -> Result<()> {
                 wordlist,
                 language,
                 &target,
-            )?
+            );
+            // A search error can leave pending launches or a poisoned CUDA
+            // context. Never run another job or retry the failed one here.
+            if result.is_err() {
+                session.fatal = true;
+                session.gpu.take();
+            }
+            result?
         } else {
             run_cpu_search(
                 &args,

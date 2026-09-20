@@ -1,0 +1,4 @@
+trial,fresh_seconds,resident_seconds,speedup,verified_equal,candidates_per_variant,checksum_survivors_per_variant,jobs_per_variant,fresh_cuda_initializations,resident_cuda_initializations,resident_cuda_reuses
+1,4.3896611000000005,0.9760380000000005,4.4974284812681455,true,1088640,68284,12,12,1,11
+2,4.4999583,0.9679439999999995,4.648986201681092,true,1088640,68284,12,12,1,11
+3,4.4811288000000005,0.9530073999999986,4.702092344718422,true,1088640,68284,12,12,1,11

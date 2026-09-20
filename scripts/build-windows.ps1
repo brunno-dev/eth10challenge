@@ -44,11 +44,20 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'CUDA-build unit tests failed.' }
             & cargo test --release --no-default-features --locked
             if ($LASTEXITCODE -ne 0) { throw 'CPU-build unit tests failed.' }
+            # Integration tests also build the ordinary executable. The CPU
+            # suite overwrites release/words-breaker.exe, so restore the CUDA
+            # binary before selftests or packaging the desktop sidecar.
+            & cargo build --release --locked
+            if ($LASTEXITCODE -ne 0) { throw 'Restoring the CUDA executable failed.' }
         }
         if ($Selftest) {
             $target = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $projectRoot 'target' }
             & (Join-Path $target 'release/words-breaker.exe') --selftest
             if ($LASTEXITCODE -ne 0) { throw 'CUDA selftest failed.' }
+            if ($Check) {
+                & cargo test --release --locked --test worker_protocol cuda_worker_ -- --ignored --test-threads=1
+                if ($LASTEXITCODE -ne 0) { throw 'CUDA resident worker integration tests failed.' }
+            }
         }
     } finally { Pop-Location }
 } finally {

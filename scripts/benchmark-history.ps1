@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$OutputDirectory,
     [int]$Trials = 3,
     [int]$MaxCandidates = 5000000,
+    [ValidateRange(1,16777216)][int]$BatchSize = 65536,
     [string[]]$Cases = @('coins', 'combined')
 )
 $ErrorActionPreference = 'Stop'
@@ -37,7 +38,7 @@ foreach ($case in $Cases) {
             $arguments = @(
                 '0x9c2f44efad0c1e852a09df9939e6daf061140caf',
                 '--post', 'dutch@1 fiber fork dinner cloud live', '--video', $video,
-                '--batch-size', '65536', '--max-candidates', "$MaxCandidates",
+                '--batch-size', "$BatchSize", '--max-candidates', "$MaxCandidates",
                 '--exclude-tested', 'RO1', '--exclude-record-dir', $historyPath,
                 '--checkpoint', "$prefix.checkpoint.json", '--record-progress', "$prefix.record.json",
                 '--metrics-json', "$prefix.metrics.json", '--metrics'
@@ -63,6 +64,7 @@ foreach ($case in $Cases) {
                 case=$case; trial=$trial; variant=$variant; wall_seconds=$timer.Elapsed.TotalSeconds
                 raw=$metrics.completed_raw; excluded=$metrics.excluded
                 producer=$metrics.producer_seconds; derive=$metrics.derive_seconds; pruned=$metrics.pruned
+                seed=$metrics.gpu_seed_seconds; address=$metrics.gpu_address_seconds
             } | ConvertTo-Json -Compress
         }
         $old = Get-Content -LiteralPath (Join-Path $outputPath "$case-$trial-before.checkpoint.json") -Raw | ConvertFrom-Json

@@ -3,6 +3,7 @@
 
 use anyhow::{Context as _, Result};
 use cust::context::Context;
+use cust::event::{Event, EventFlags};
 use cust::launch;
 use cust::memory::{CopyDestination, DeviceBuffer};
 use cust::module::Module;
@@ -618,6 +619,14 @@ impl Gpu {
         let filter = self.module.get_function("k_filter")?;
         let seed_kernel = self.module.get_function("k_candidate_seeds")?;
         let address_kernel = self.module.get_function("k_seed_addresses")?;
+        // Events are reused, recorded on the same stream, and queried only
+        // after the existing final synchronization. Do not add a host barrier
+        // between seed and address kernels just to time them.
+        let seed_start_event = Event::new(EventFlags::DEFAULT)?;
+        let seed_end_event = Event::new(EventFlags::DEFAULT)?;
+        let address_end_event = Event::new(EventFlags::DEFAULT)?;
+        metrics.gpu_seed_seconds = Some(0.0);
+        metrics.gpu_address_seconds = Some(0.0);
 
         // Reuse device buffers across batches. Only the survivor seed buffer
         // may grow; cudaMalloc/cudaFree implicitly synchronize the device.
@@ -757,6 +766,8 @@ impl Gpu {
 
                 // Pass 2: heavy derivation over survivors only.
                 let derive_start = std::time::Instant::now();
+                let mut seed_seconds = 0.0;
+                let mut address_seconds = 0.0;
                 if count > 0 {
                     let seed_bytes = count as usize * 64;
                     if d_seeds.len() < seed_bytes {
@@ -764,6 +775,7 @@ impl Gpu {
                         d_seeds = unsafe { DeviceBuffer::uninitialized(capacity)? };
                     }
                     let grid2 = count.div_ceil(block);
+                    seed_start_event.record(stream)?;
                     unsafe {
                         launch!(seed_kernel<<<grid2, block, 0, stream>>>(
                             d_cand.as_device_ptr(),
@@ -774,6 +786,9 @@ impl Gpu {
                             wordlist.stride as u32,
                             d_seeds.as_device_ptr()
                         ))?;
+                    }
+                    seed_end_event.record(stream)?;
+                    unsafe {
                         launch!(address_kernel<<<grid2, block, 0, stream>>>(
                             d_seeds.as_device_ptr(),
                             d_survivors.as_device_ptr(),
@@ -783,7 +798,10 @@ impl Gpu {
                             d_found_idx.as_device_ptr()
                         ))?;
                     }
+                    address_end_event.record(stream)?;
                     stream.synchronize()?;
+                    seed_seconds = seed_end_event.elapsed_time_f32(&seed_start_event)? as f64 / 1000.0;
+                    address_seconds = address_end_event.elapsed_time_f32(&seed_end_event)? as f64 / 1000.0;
                 }
                 let derive_seconds = if count > 0 {
                     derive_start.elapsed().as_secs_f64()
@@ -823,6 +841,8 @@ impl Gpu {
                 metrics.transfer_seconds += transfer_seconds;
                 metrics.filter_seconds += filter_seconds;
                 metrics.derive_seconds += derive_seconds;
+                *metrics.gpu_seed_seconds.as_mut().unwrap() += seed_seconds;
+                *metrics.gpu_address_seconds.as_mut().unwrap() += address_seconds;
                 if adaptive {
                     let before = controller.size();
                     let next = controller.observe(requested, n, device_elapsed);
@@ -1591,6 +1611,8 @@ pub fn run_selftest() -> Result<bool> {
         && metrics.completed_raw == 50_000
         && metrics.retained == 50_000
         && metrics.checksum_survivors == 0
+        && metrics.gpu_seed_seconds == Some(0.0)
+        && metrics.gpu_address_seconds == Some(0.0)
         && metrics.min_batch_size == Some(16_384)
         && metrics.adaptive_changes > 0
         && metrics.max_batch_size.is_some_and(|n| n <= 65_536);
@@ -1617,7 +1639,34 @@ pub fn run_selftest() -> Result<bool> {
     adaptive_ok &= adaptive_hit.is_some_and(|h| h.global_index == 2000 && h.indices == witness_ids)
         && hit_metrics.completed_raw == 1024
         && hit_metrics.completed_batches == 1
-        && hit_metrics.checksum_survivors == 0;
+        && hit_metrics.checksum_survivors == 0
+        && hit_metrics.gpu_seed_seconds == Some(0.0)
+        && hit_metrics.gpu_address_seconds == Some(0.0);
+    // Event timings count confirmed negative batches only, just like counts.
+    // Dense valid input ensures both kernels run, independent of checksum luck.
+    let mut timed_metrics = crate::metrics::SearchMetrics::default();
+    let timed_hit = gpu.search_steps_observed(
+        vec![witness_ids; 256].into_iter(),
+        &words,
+        &[0; 20],
+        128,
+        64,
+        256,
+        true,
+        None,
+        false,
+        true,
+        false,
+        None,
+        &mut timed_metrics,
+        |it, _| it.next().map(crate::candidates::Step::Candidate),
+        |_, _, _, _| Ok(()),
+    )?;
+    adaptive_ok &= timed_hit.is_none()
+        && timed_metrics.completed_raw == 256
+        && timed_metrics.checksum_survivors == 256
+        && timed_metrics.gpu_seed_seconds.is_some_and(|s| s.is_finite() && s > 0.0)
+        && timed_metrics.gpu_address_seconds.is_some_and(|s| s.is_finite() && s > 0.0);
     report(
         "adaptive batches, stage metrics, limits and uncommitted hit batch",
         adaptive_ok,

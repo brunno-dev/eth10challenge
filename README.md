@@ -50,6 +50,10 @@ Use **Continuar fila** para retomar ou **Encerrar fila** para liberar novas busc
 sem apagar os checkpoints e negativos. A fila também reserva o motor entre linhas
 para evitar competição com comandos manuais/MCP.
 
+A fila mantém o motor residente entre linhas e retomadas, reaproveitando o
+contexto CUDA. Cada busca relê o histórico compatível. O processo é liberado ao
+concluir, pausar ou interromper a fila; veja o [protocolo residente](docs/RESIDENT-WORKER.md).
+
 Exemplo de formato: [`desktop/exemplo-lista.txt`](desktop/exemplo-lista.txt).
 Documentos protegidos, corrompidos ou de formatos antigos não reconhecidos devem
 ser salvos como TXT. A leitura Word usa [rwml](https://docs.rs/rwml/0.1.4/rwml/),
@@ -203,6 +207,10 @@ The 2026-09-06 upstream update (`855fe1e`) is integrated; see
 ```
 words-breaker <TARGET_ADDRESS> <WORD1> <WORD2> ... <WORD12> [OPTIONS]
 ```
+
+For local integrations that submit sequential searches, `words-breaker --worker`
+provides the [resident JSONL protocol](docs/RESIDENT-WORKER.md). Keep stdin open,
+send one job at a time and wait for its `done`; EOF cancels an active search.
 
 ### Arguments
 
@@ -418,8 +426,12 @@ report.json` writes them to a new JSON file after normal termination. CPU and GP
 report original candidates, exclusions, candidates retained for checking and
 derivation candidates. GPU timings separate host generation/history filtering,
 queue waiting, transfers, checksum filtering and derivation. CPU reports checksum
-and derivation together. Timings use host clocks and overlap across producer/GPU
-work; they must not be added as if all stages were sequential.
+and derivation together. Most timings use host clocks and overlap across
+producer/GPU work; they must not be added as if all stages were sequential.
+`gpu_seed_seconds` and `gpu_address_seconds` additionally use CUDA events to
+separate the two kernels within derivation. See the
+[GPU measurements and resident searches](history/GPU-RESIDENT.md) for results
+and rejected kernel experiments.
 
 Metrics are per invocation, including on resume, and exclude prefetched work and
 the batch containing a hit. Requested batch sizes and adjustment counts are
