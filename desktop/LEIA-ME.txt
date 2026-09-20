@@ -8,6 +8,10 @@ Mantenha a pasta "engine" ao lado do aplicativo.
 3. "Pausar" aguarda o lote em andamento e salva o progresso.
 4. Use "Continuar" no histórico para retomar uma busca pausada ou limitada.
 
+Novas buscas usam lotes de até 1.048.576 para aproveitar melhor a GPU.
+O lote agrupa o trabalho; o limite da rodada continua em 100.000 por padrão.
+Você pode alterar ambos em Controles avançados. Retomadas mantêm os valores salvos.
+
 IMPORTAR UMA LISTA
 Na aba "Importar arquivo", selecione um TXT, DOC ou DOCX de até 10 MB e 100.000 linhas.
 Use 12 palavras por linha (no Word, pressione Enter entre as listas).

@@ -71,7 +71,10 @@ O alvo do desafio, inglês, checksum e GPU automática são os padrões. RO1 é 
 somente quando compatível com alvo/idioma/checksum. O histórico local é obrigatório.
 
 O limite padrão é 100.000 candidatos por rodada e o máximo aceito pelo adaptador
-é 1 bilhão. Limites contam também exclusões. `limited`/`paused` não significam
+é 1 bilhão. O lote padrão (`batchSize`) é 1.048.576, com `adaptive=false`, igual
+à interface e ao CLI. O lote só agrupa o processamento e não aumenta o limite
+da rodada. Valores explícitos e configurações de retomadas são preservados.
+Limites contam também exclusões. `limited`/`paused` não significam
 busca completa. `completed` significa que aquele espaço foi esgotado; `covered`
 significa que a busca foi bloqueada antes de executar. Contagens são strings para
 preservar inteiros grandes. `fullyCovered=false` pode conter sobreposição parcial;

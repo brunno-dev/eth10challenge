@@ -66,6 +66,12 @@ O monitor mostra contadores, velocidade, mensagens e métricas do motor.
 Os controles avançados incluem limites, idioma, checksum e exclusão de
 tentativas anteriores. O exemplo usa um endereço zero e palavras sintéticas.
 
+Novas buscas usam lotes de até **1.048.576 candidatos**, igual ao motor CLI.
+Esse ajuste aproveitou melhor a GPU nos testes locais; veja a
+[comparação de lotes](history/GPU-BATCHES.md). O limite por rodada continua em
+100.000 por padrão e pode ser alterado separadamente. Retomadas preservam o
+tamanho de lote salvo. CPU e modo sem checksum mantêm seus limites internos.
+
 Novas buscas abrem em Post + vídeo com o endereço do desafio Guntis Vitolins
 (`0x9c2f44efad0c1e852a09df9939e6daf061140caf`), post `dutch@1 fiber fork`
 e vídeo `fog@5 parrot@12`. Complete as listas com pelo menos seis palavras

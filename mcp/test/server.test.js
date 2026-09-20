@@ -66,6 +66,11 @@ test('configuration defaults preserve the challenge and history compatibility', 
   const config = toConfig(hypothesis);
   assert.equal(config.target, CHALLENGE_TARGET);
   assert.equal(config.maxCandidates, '100000');
+  assert.equal(config.batchSize, 1048576);
+  assert.equal(config.adaptive, false);
+  const customized = toConfig({ ...hypothesis, batchSize: 65536, adaptive: true });
+  assert.equal(customized.batchSize, 65536);
+  assert.equal(customized.adaptive, true);
   assert.equal(config.excludeRo1, true);
   assert.deepEqual(config.excludeRecords, []);
   assert.equal(toConfig({ ...hypothesis, target: '0x' + '0'.repeat(40) }).excludeRo1, false);

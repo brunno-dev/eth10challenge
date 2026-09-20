@@ -22,7 +22,7 @@ export const searchSchema = z.object({
   backend: z.enum(['auto', 'cpu']).default('auto'),
   language: z.enum(['english','portuguese','spanish','french','italian','czech','korean','japanese','chinese-simplified','chinese-traditional']).default('english'),
   maxCandidates: z.number().int().min(1).max(1_000_000_000).default(100000).describe('Limite por rodada, contando exclusões. Retome uma rodada limitada para continuar. Padrão 100000.'),
-  batchSize: z.number().int().min(1).max(1048576).default(65536),
+  batchSize: z.number().int().min(1).max(1048576).default(1048576).describe('Máximo de candidatos por lote; não altera maxCandidates. Padrão 1048576, igual ao motor CLI.'),
   threads: z.number().int().min(0).max(1024).default(0),
   adaptive: z.boolean().default(false),
   noChecksum: z.boolean().default(false),
